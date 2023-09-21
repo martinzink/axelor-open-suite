@@ -1,11 +1,12 @@
 /*
  * Axelor Business Solutions
  *
- * Copyright (C) 2021 Axelor (<http://axelor.com>).
+ * Copyright (C) 2005-2023 Axelor (<http://axelor.com>).
  *
- * This program is free software: you can redistribute it and/or  modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -13,42 +14,40 @@
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 package com.axelor.apps.hr.web.leave;
 
+import com.axelor.apps.base.AxelorException;
 import com.axelor.apps.base.db.Company;
-import com.axelor.apps.base.db.ICalendarEvent;
-import com.axelor.apps.base.db.Wizard;
 import com.axelor.apps.base.service.PeriodService;
+import com.axelor.apps.base.service.exception.TraceBackService;
 import com.axelor.apps.base.service.message.MessageServiceBaseImpl;
 import com.axelor.apps.hr.db.Employee;
 import com.axelor.apps.hr.db.LeaveLine;
 import com.axelor.apps.hr.db.LeaveReason;
 import com.axelor.apps.hr.db.LeaveRequest;
 import com.axelor.apps.hr.db.repo.EmployeeRepository;
-import com.axelor.apps.hr.db.repo.LeaveLineRepository;
 import com.axelor.apps.hr.db.repo.LeaveReasonRepository;
 import com.axelor.apps.hr.db.repo.LeaveRequestRepository;
-import com.axelor.apps.hr.exception.IExceptionMessage;
+import com.axelor.apps.hr.exception.HumanResourceExceptionMessage;
 import com.axelor.apps.hr.service.HRMenuTagService;
 import com.axelor.apps.hr.service.HRMenuValidateService;
 import com.axelor.apps.hr.service.config.HRConfigService;
 import com.axelor.apps.hr.service.leave.LeaveService;
-import com.axelor.apps.message.db.Message;
-import com.axelor.apps.message.db.repo.MessageRepository;
 import com.axelor.auth.AuthUtils;
 import com.axelor.auth.db.User;
 import com.axelor.db.Query;
-import com.axelor.exception.AxelorException;
-import com.axelor.exception.service.TraceBackService;
 import com.axelor.i18n.I18n;
 import com.axelor.inject.Beans;
+import com.axelor.message.db.Message;
+import com.axelor.message.db.repo.MessageRepository;
 import com.axelor.meta.CallMethod;
 import com.axelor.meta.schema.actions.ActionView;
 import com.axelor.meta.schema.actions.ActionView.ActionViewBuilder;
 import com.axelor.rpc.ActionRequest;
 import com.axelor.rpc.ActionResponse;
+import com.axelor.utils.db.Wizard;
 import com.google.inject.Singleton;
 import com.google.inject.persist.Transactional;
 import java.util.List;
@@ -66,8 +65,8 @@ public class LeaveController {
           Beans.get(LeaveRequestRepository.class)
               .all()
               .filter(
-                  "self.user = ?1 AND self.company = ?2 AND self.statusSelect = 1",
-                  user,
+                  "self.employee.user.id = ?1 AND self.company = ?2 AND self.statusSelect = 1",
+                  user.getId(),
                   user.getActiveCompany())
               .fetch();
       if (leaveList.isEmpty()) {
@@ -158,11 +157,12 @@ public class LeaveController {
               .add("form", "leave-request-form")
               .param("search-filters", "leave-request-filters");
 
-      actionView.domain("(self.statusSelect = 3 OR self.statusSelect = 4)");
+      actionView.domain(
+          "(self.statusSelect = 1 OR self.statusSelect = 3 OR self.statusSelect = 4)");
 
       if (employee == null || !employee.getHrManager()) {
         actionView
-            .domain(actionView.get().getDomain() + " AND self.user.employee.managerUser = :_user")
+            .domain(actionView.get().getDomain() + " AND self.employee.managerUser = :_user")
             .context("_user", user);
       }
 
@@ -174,28 +174,16 @@ public class LeaveController {
 
   public void leaveCalendar(ActionRequest request, ActionResponse response) {
     try {
-
       User user = AuthUtils.getUser();
-      Employee employee = user.getEmployee();
-
       ActionViewBuilder actionView =
           ActionView.define(I18n.get("Leaves calendar"))
-              .model(ICalendarEvent.class.getName())
+              .model(LeaveRequest.class.getName())
               .add("calendar", "calendar-event-leave-request")
-              .add("grid", "calendar-event-grid")
-              .add("form", "calendar-event-form");
+              .add("grid", "leave-request-grid")
+              .add("form", "leave-request-form");
 
-      actionView.domain(
-          "self.typeSelect = 4 AND self.id IN (SELECT leaveRequest.icalendarEvent FROM LeaveRequest leaveRequest WHERE leaveRequest.statusSelect = 3");
-
-      if (employee == null || !employee.getHrManager()) {
-        actionView
-            .domain(
-                actionView.get().getDomain()
-                    + " AND leaveRequest.user.employee.managerUser = :_user")
-            .context("_user", user);
-      }
-      actionView.domain(actionView.get().getDomain() + ")");
+      actionView.domain(Beans.get(LeaveService.class).getLeaveCalendarDomain(user));
+      actionView.context("userId", user.getId());
       response.setView(actionView.map());
     } catch (Exception e) {
       TraceBackService.trace(response, e);
@@ -208,7 +196,7 @@ public class LeaveController {
       User user = AuthUtils.getUser();
 
       String domain =
-          "self.user.employee.managerUser.employee.managerUser = :_user AND self.statusSelect = 2";
+          "self.employee.managerUser.employee.managerUser = :_user AND self.statusSelect = 2";
       long nbLeaveRequests =
           Query.of(LeaveRequest.class).filter(domain).bind("_user", user).count();
 
@@ -243,6 +231,10 @@ public class LeaveController {
   public void computeDuration(ActionRequest request, ActionResponse response) {
     try {
       LeaveRequest leave = request.getContext().asType(LeaveRequest.class);
+      Employee employee = leave.getEmployee();
+      if (employee == null) {
+        return;
+      }
       response.setValue("duration", Beans.get(LeaveService.class).computeDuration(leave));
     } catch (Exception e) {
       TraceBackService.trace(response, e);
@@ -257,21 +249,15 @@ public class LeaveController {
       LeaveRequest leaveRequest = request.getContext().asType(LeaveRequest.class);
       leaveRequest = Beans.get(LeaveRequestRepository.class).find(leaveRequest.getId());
 
-      if (leaveRequest.getUser().getEmployee().getWeeklyPlanning() == null) {
+      if (leaveRequest.getEmployee().getWeeklyPlanning() == null) {
         response.setAlert(
             String.format(
-                I18n.get(IExceptionMessage.EMPLOYEE_PLANNING),
-                leaveRequest.getUser().getEmployee().getName()));
+                I18n.get(HumanResourceExceptionMessage.EMPLOYEE_PLANNING),
+                leaveRequest.getEmployee().getName()));
         return;
       }
 
-      LeaveLine leaveLine =
-          Beans.get(LeaveLineRepository.class)
-              .all()
-              .filter("self.leaveReason = :leaveReason AND self.employee = :employee")
-              .bind("leaveReason", leaveRequest.getLeaveReason())
-              .bind("employee", leaveRequest.getUser().getEmployee())
-              .fetchOne();
+      LeaveLine leaveLine = leaveService.getLeaveLine(leaveRequest);
       if (leaveLine != null
           && leaveLine.getQuantity().subtract(leaveRequest.getDuration()).signum() < 0) {
         if (!leaveRequest.getLeaveReason().getAllowNegativeValue()
@@ -282,7 +268,7 @@ public class LeaveController {
           }
           response.setAlert(
               String.format(
-                      I18n.get(IExceptionMessage.LEAVE_ALLOW_NEGATIVE_VALUE_REASON),
+                      I18n.get(HumanResourceExceptionMessage.LEAVE_ALLOW_NEGATIVE_VALUE_REASON),
                       leaveRequest.getLeaveReason().getName())
                   + " "
                   + instruction);
@@ -290,7 +276,7 @@ public class LeaveController {
         } else {
           response.setNotify(
               String.format(
-                  I18n.get(IExceptionMessage.LEAVE_ALLOW_NEGATIVE_ALERT),
+                  I18n.get(HumanResourceExceptionMessage.LEAVE_ALLOW_NEGATIVE_ALERT),
                   leaveRequest.getLeaveReason().getName()));
         }
       }
@@ -299,7 +285,7 @@ public class LeaveController {
 
       Message message = leaveService.sendConfirmationEmail(leaveRequest);
       if (message != null && message.getStatusSelect() == MessageRepository.STATUS_SENT) {
-        response.setFlash(
+        response.setInfo(
             String.format(
                 I18n.get("Email sent to %s"),
                 Beans.get(MessageServiceBaseImpl.class).getToRecipients(message)));
@@ -330,7 +316,7 @@ public class LeaveController {
 
       Message message = leaveService.sendValidationEmail(leaveRequest);
       if (message != null && message.getStatusSelect() == MessageRepository.STATUS_SENT) {
-        response.setFlash(
+        response.setInfo(
             String.format(
                 I18n.get("Email sent to %s"),
                 Beans.get(MessageServiceBaseImpl.class).getToRecipients(message)));
@@ -355,7 +341,7 @@ public class LeaveController {
    * @param response
    * @throws AxelorException
    */
-  public void refuse(ActionRequest request, ActionResponse response) throws AxelorException {
+  public void refuse(ActionRequest request, ActionResponse response) {
 
     try {
       LeaveService leaveService = Beans.get(LeaveService.class);
@@ -366,7 +352,7 @@ public class LeaveController {
 
       Message message = leaveService.sendRefusalEmail(leaveRequest);
       if (message != null && message.getStatusSelect() == MessageRepository.STATUS_SENT) {
-        response.setFlash(
+        response.setInfo(
             String.format(
                 I18n.get("Email sent to %s"),
                 Beans.get(MessageServiceBaseImpl.class).getToRecipients(message)));
@@ -389,7 +375,7 @@ public class LeaveController {
 
       Message message = leaveService.sendCancellationEmail(leave);
       if (message != null && message.getStatusSelect() == MessageRepository.STATUS_SENT) {
-        response.setFlash(
+        response.setInfo(
             String.format(
                 I18n.get("Email sent to %s"),
                 Beans.get(MessageServiceBaseImpl.class).getToRecipients(message)));
@@ -414,11 +400,11 @@ public class LeaveController {
         return;
       }
       Company company = leave.getCompany();
-      if (leave.getUser() == null) {
+      if (leave.getEmployee() == null) {
         return;
       }
-      if (company == null) {
-        company = leave.getUser().getActiveCompany();
+      if (company == null && leave.getEmployee().getUser() != null) {
+        company = leave.getEmployee().getUser().getActiveCompany();
       }
       if (company == null) {
         return;
@@ -426,14 +412,14 @@ public class LeaveController {
 
       Beans.get(HRConfigService.class).getLeaveReason(company.getHrConfig());
 
-      Employee employee = leave.getUser().getEmployee();
+      Employee employee = leave.getEmployee();
 
       LeaveReason leaveReason =
           Beans.get(LeaveReasonRepository.class)
               .find(company.getHrConfig().getToJustifyLeaveReason().getId());
 
       if (employee != null) {
-        employee = Beans.get(EmployeeRepository.class).find(leave.getUser().getEmployee().getId());
+        employee = Beans.get(EmployeeRepository.class).find(employee.getId());
         leaveLine = Beans.get(LeaveService.class).addLeaveReasonOrCreateIt(employee, leaveReason);
         response.setValue("leaveLine", leaveLine);
       }

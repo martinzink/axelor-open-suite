@@ -1,11 +1,12 @@
 /*
  * Axelor Business Solutions
  *
- * Copyright (C) 2021 Axelor (<http://axelor.com>).
+ * Copyright (C) 2005-2023 Axelor (<http://axelor.com>).
  *
- * This program is free software: you can redistribute it and/or  modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -13,20 +14,21 @@
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 package com.axelor.apps.base.service.tax;
 
 import com.axelor.apps.account.db.AccountManagement;
 import com.axelor.apps.account.db.FiscalPosition;
 import com.axelor.apps.account.db.Tax;
+import com.axelor.apps.account.db.TaxEquiv;
 import com.axelor.apps.account.db.TaxLine;
+import com.axelor.apps.base.AxelorException;
 import com.axelor.apps.base.db.Company;
 import com.axelor.apps.base.db.Product;
 import com.axelor.apps.base.db.ProductFamily;
-import com.axelor.apps.base.exceptions.IExceptionMessage;
-import com.axelor.exception.AxelorException;
-import com.axelor.exception.db.repo.TraceBackRepository;
+import com.axelor.apps.base.db.repo.TraceBackRepository;
+import com.axelor.apps.base.exceptions.BaseExceptionMessage;
 import com.axelor.i18n.I18n;
 import com.google.inject.Inject;
 import java.lang.invoke.MethodHandles;
@@ -113,6 +115,7 @@ public class AccountManagementServiceImpl implements AccountManagementService {
    * @param company
    * @return
    */
+  @Override
   public AccountManagement getAccountManagement(
       List<AccountManagement> accountManagements, Company company) {
 
@@ -122,12 +125,20 @@ public class AccountManagementServiceImpl implements AccountManagementService {
 
     for (AccountManagement accountManagement : accountManagements) {
       if (accountManagement.getCompany().equals(company)) {
-        LOG.debug("Obtention de la configuration comptable => société: {}", company.getName());
+        LOG.debug("Get account management configuration => company: {}", company.getName());
 
         return accountManagement;
       }
     }
     return null;
+  }
+
+  @Override
+  public TaxEquiv getProductTaxEquiv(
+      Product product, Company company, FiscalPosition fiscalPosition, boolean isPurchase)
+      throws AxelorException {
+    Tax tax = getProductTax(product, company, isPurchase);
+    return fiscalPositionService.getTaxEquiv(fiscalPosition, tax);
   }
 
   /**
@@ -140,22 +151,10 @@ public class AccountManagementServiceImpl implements AccountManagementService {
    * @return the tax defined for the product, according to the fiscal position
    * @throws AxelorException
    */
-  @Override
-  public Tax getProductTax(
+  protected Tax getProductTax(
       Product product, Company company, FiscalPosition fiscalPosition, boolean isPurchase)
       throws AxelorException {
-
-    LOG.debug(
-        "Get the tax for the product {} (company : {}, purchase : {}, fiscal position : {})",
-        new Object[] {
-          product.getCode(),
-          company.getName(),
-          isPurchase,
-          fiscalPosition != null ? fiscalPosition.getCode() : null
-        });
-
-    Tax generalTax = this.getProductTax(product, company, isPurchase, CONFIG_OBJECT_PRODUCT);
-
+    Tax generalTax = this.getProductTax(product, company, isPurchase);
     Tax tax = fiscalPositionService.getTax(fiscalPosition, generalTax);
 
     if (tax != null) {
@@ -164,7 +163,38 @@ public class AccountManagementServiceImpl implements AccountManagementService {
 
     throw new AxelorException(
         TraceBackRepository.CATEGORY_CONFIGURATION_ERROR,
-        I18n.get(IExceptionMessage.ACCOUNT_MANAGEMENT_3),
+        I18n.get(BaseExceptionMessage.ACCOUNT_MANAGEMENT_3),
+        product.getCode(),
+        company.getName());
+  }
+
+  /**
+   * Get product tax before using tax equiv from fiscal position.
+   *
+   * @param product
+   * @param company
+   * @param isPurchase specify if we want get the tax for purchase or sale
+   * @return the tax defined for the product
+   * @throws AxelorException
+   */
+  protected Tax getProductTax(Product product, Company company, boolean isPurchase)
+      throws AxelorException {
+
+    LOG.debug(
+        "Get the tax for the product {} (company : {}, purchase : {}",
+        product.getCode(),
+        company.getName(),
+        isPurchase);
+
+    Tax tax = this.getProductTax(product, company, isPurchase, CONFIG_OBJECT_PRODUCT);
+
+    if (tax != null) {
+      return tax;
+    }
+
+    throw new AxelorException(
+        TraceBackRepository.CATEGORY_CONFIGURATION_ERROR,
+        I18n.get(BaseExceptionMessage.ACCOUNT_MANAGEMENT_3),
         product.getCode(),
         company.getName());
   }
@@ -229,7 +259,7 @@ public class AccountManagementServiceImpl implements AccountManagementService {
 
     throw new AxelorException(
         TraceBackRepository.CATEGORY_CONFIGURATION_ERROR,
-        I18n.get(IExceptionMessage.ACCOUNT_MANAGEMENT_2),
+        I18n.get(BaseExceptionMessage.ACCOUNT_MANAGEMENT_2),
         product.getCode());
   }
 }

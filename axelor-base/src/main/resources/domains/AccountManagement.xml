@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <domain-models xmlns="http://axelor.com/xml/ns/domain-models"
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xsi:schemaLocation="http://axelor.com/xml/ns/domain-models http://axelor.com/xml/ns/domain-models/domain-models_5.4.xsd">
+  xsi:schemaLocation="http://axelor.com/xml/ns/domain-models http://axelor.com/xml/ns/domain-models/domain-models_6.1.xsd">
 
   <module name="account" package="com.axelor.apps.account.db"/>
 
-  <entity name="AccountManagement" lang="java">
+  <entity name="AccountManagement">
 
     <integer name="typeSelect" title="Type" required="true"
       selection="account.management.type.select"/>
@@ -19,6 +19,15 @@
     <many-to-one name="product" ref="com.axelor.apps.base.db.Product" title="Product"/>
     <many-to-one name="productFamily" ref="com.axelor.apps.base.db.ProductFamily"
       title="Accounting family"/>
+
+    <extra-code><![CDATA[
+
+		   	// TYPE SELECT
+			public static final int TYPE_PRODUCT = 1;
+			public static final int TYPE_TAX = 2;
+			public static final int TYPE_PAYMENT = 3;
+
+		]]></extra-code>
 
   </entity>
 

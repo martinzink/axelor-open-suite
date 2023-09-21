@@ -1,11 +1,12 @@
 /*
  * Axelor Business Solutions
  *
- * Copyright (C) 2021 Axelor (<http://axelor.com>).
+ * Copyright (C) 2005-2023 Axelor (<http://axelor.com>).
  *
- * This program is free software: you can redistribute it and/or  modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -13,13 +14,16 @@
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 package com.axelor.apps.businessproject.service.batch;
 
-import com.axelor.apps.base.db.AppBusinessProject;
+import com.axelor.apps.base.db.repo.BatchRepository;
+import com.axelor.apps.base.db.repo.ExceptionOriginRepository;
+import com.axelor.apps.base.exceptions.BaseExceptionMessage;
 import com.axelor.apps.base.service.administration.AbstractBatch;
-import com.axelor.apps.businessproject.exception.IExceptionMessage;
+import com.axelor.apps.base.service.exception.TraceBackService;
+import com.axelor.apps.businessproject.exception.BusinessProjectExceptionMessage;
 import com.axelor.apps.businessproject.service.ProjectTaskBusinessProjectService;
 import com.axelor.apps.businessproject.service.TimesheetLineBusinessService;
 import com.axelor.apps.businessproject.service.app.AppBusinessProjectService;
@@ -29,9 +33,9 @@ import com.axelor.apps.project.db.ProjectTask;
 import com.axelor.apps.project.db.repo.ProjectTaskRepository;
 import com.axelor.db.JPA;
 import com.axelor.db.Query;
-import com.axelor.exception.db.repo.ExceptionOriginRepository;
-import com.axelor.exception.service.TraceBackService;
 import com.axelor.i18n.I18n;
+import com.axelor.studio.db.AppBusinessProject;
+import com.axelor.utils.QueryBuilder;
 import com.google.common.base.Strings;
 import com.google.inject.Inject;
 import java.util.ArrayList;
@@ -63,43 +67,69 @@ public class BatchUpdateTaskService extends AbstractBatch {
 
   @Override
   protected void process() {
+
+    this.updateTasks();
+
     Map<String, Object> contextValues = null;
     try {
-      contextValues = ProjectInvoicingAssistantBatchService.createJsonContext(batch);
+      contextValues = BusinessProjectBatchService.createJsonContext(batch);
     } catch (Exception e) {
       TraceBackService.trace(e);
     }
 
-    this.updateTasks(contextValues);
-    this.updateTimesheetLines(contextValues);
+    AppBusinessProject appBusinessProject = appBusinessProjectService.getAppBusinessProject();
+    if (!appBusinessProject.getAutomaticInvoicing()) {
+      this.updateTaskToInvoice(contextValues, appBusinessProject);
+      this.updateTimesheetLines(contextValues);
+    }
   }
 
-  private void updateTasks(Map<String, Object> contextValues) {
-    AppBusinessProject appBusinessProject = appBusinessProjectService.getAppBusinessProject();
-    List<Object> updatedTaskList = new ArrayList<Object>();
+  protected void updateTasks() {
+    QueryBuilder<ProjectTask> taskQueryBuilder =
+        projectTaskBusinessProjectService.getTaskInvoicingFilter();
 
-    String filter =
-        !Strings.isNullOrEmpty(appBusinessProject.getExculdeTaskInvoicing())
-            ? "self.id NOT IN (SELECT id FROM ProjectTask WHERE "
-                + appBusinessProject.getExculdeTaskInvoicing()
-                + ")"
-            : "self.id NOT IN (0)";
-
-    Query<ProjectTask> taskQuery =
-        projectTaskRepo
-            .all()
-            .filter(
-                filter
-                    + " AND self.project.isBusinessProject = :isBusinessProject "
-                    + " AND self.project.toInvoice = :invoiceable "
-                    + "AND self.toInvoice = :toInvoice")
-            .bind("isBusinessProject", true)
-            .bind("invoiceable", true)
-            .bind("toInvoice", false)
-            .order("id");
+    Query<ProjectTask> taskQuery = taskQueryBuilder.build().order("id");
 
     int offset = 0;
     List<ProjectTask> taskList;
+
+    while (!(taskList = taskQuery.fetch(FETCH_LIMIT, offset)).isEmpty()) {
+      findBatch();
+      for (ProjectTask projectTask : taskList) {
+        try {
+          projectTask = projectTaskBusinessProjectService.setProjectTaskValues(projectTask);
+        } catch (Exception e) {
+          incrementAnomaly();
+          TraceBackService.trace(
+              new Exception(
+                  String.format(
+                      I18n.get(BusinessProjectExceptionMessage.BATCH_TASK_UPDATION_1),
+                      projectTask.getId()),
+                  e),
+              "task",
+              batch.getId());
+        }
+      }
+      offset += taskList.size();
+      JPA.clear();
+    }
+  }
+
+  protected void updateTaskToInvoice(
+      Map<String, Object> contextValues, AppBusinessProject appBusinessProject) {
+
+    QueryBuilder<ProjectTask> taskQueryBuilder =
+        projectTaskBusinessProjectService.getTaskInvoicingFilter();
+
+    if (!Strings.isNullOrEmpty(appBusinessProject.getExcludeTaskInvoicing())) {
+      String filter = "NOT (" + appBusinessProject.getExcludeTaskInvoicing() + ")";
+      taskQueryBuilder = taskQueryBuilder.add(filter);
+    }
+    Query<ProjectTask> taskQuery = taskQueryBuilder.build().order("id");
+
+    int offset = 0;
+    List<ProjectTask> taskList;
+    List<Object> updatedTaskList = new ArrayList<Object>();
 
     while (!(taskList = taskQuery.fetch(FETCH_LIMIT, offset)).isEmpty()) {
       findBatch();
@@ -107,10 +137,10 @@ public class BatchUpdateTaskService extends AbstractBatch {
       for (ProjectTask projectTask : taskList) {
         try {
           projectTask =
-              projectTaskBusinessProjectService.updateTask(projectTask, appBusinessProject);
+              projectTaskBusinessProjectService.updateTaskToInvoice(
+                  projectTask, appBusinessProject);
 
           if (projectTask.getToInvoice()) {
-            offset--;
             Map<String, Object> map = new HashMap<String, Object>();
             map.put("id", projectTask.getId());
             updatedTaskList.add(map);
@@ -120,7 +150,8 @@ public class BatchUpdateTaskService extends AbstractBatch {
           TraceBackService.trace(
               new Exception(
                   String.format(
-                      I18n.get(IExceptionMessage.BATCH_TASK_UPDATION_1), projectTask.getId()),
+                      I18n.get(BusinessProjectExceptionMessage.BATCH_TASK_UPDATION_1),
+                      projectTask.getId()),
                   e),
               ExceptionOriginRepository.INVOICE_ORIGIN,
               batch.getId());
@@ -129,30 +160,17 @@ public class BatchUpdateTaskService extends AbstractBatch {
       JPA.clear();
     }
     findBatch();
-    ProjectInvoicingAssistantBatchService.updateJsonObject(
+    BusinessProjectBatchService.updateJsonObject(
         batch, updatedTaskList, "updatedTaskSet", contextValues);
   }
 
-  private void updateTimesheetLines(Map<String, Object> contextValues) {
+  protected void updateTimesheetLines(Map<String, Object> contextValues) {
 
     List<Object> updatedTimesheetLineList = new ArrayList<Object>();
 
-    Query<TimesheetLine> timesheetLineQuery =
-        timesheetLineRepo
-            .all()
-            .filter(
-                "((self.projectTask.parentTask.invoicingType = :_invoicingType "
-                    + "AND self.projectTask.parentTask.toInvoice = :_teamTaskToInvoice) "
-                    + " OR (self.projectTask.parentTask IS NULL "
-                    + "AND self.projectTask.invoicingType = :_invoicingType "
-                    + "AND self.projectTask.toInvoice = :_projectTaskToInvoice)) "
-                    + "AND self.projectTask.project.isBusinessProject = :_isBusinessProject "
-                    + "AND self.toInvoice = :_toInvoice")
-            .bind("_invoicingType", ProjectTaskRepository.INVOICING_TYPE_TIME_SPENT)
-            .bind("_isBusinessProject", true)
-            .bind("_projectTaskToInvoice", true)
-            .bind("_toInvoice", false)
-            .order("id");
+    QueryBuilder<TimesheetLine> timesheetLineQueryBuilder =
+        timesheetLineBusinessService.getTimesheetLineInvoicingFilter();
+    Query<TimesheetLine> timesheetLineQuery = timesheetLineQueryBuilder.build().order("id");
 
     int offset = 0;
     List<TimesheetLine> timesheetLineList;
@@ -163,9 +181,7 @@ public class BatchUpdateTaskService extends AbstractBatch {
       for (TimesheetLine timesheetLine : timesheetLineList) {
         try {
           timesheetLine = timesheetLineBusinessService.updateTimesheetLines(timesheetLine);
-
           if (timesheetLine.getToInvoice()) {
-            offset--;
             Map<String, Object> map = new HashMap<String, Object>();
             map.put("id", timesheetLine.getId());
             updatedTimesheetLineList.add(map);
@@ -175,7 +191,7 @@ public class BatchUpdateTaskService extends AbstractBatch {
           TraceBackService.trace(
               new Exception(
                   String.format(
-                      I18n.get(IExceptionMessage.BATCH_TIMESHEETLINE_UPDATION_1),
+                      I18n.get(BusinessProjectExceptionMessage.BATCH_TIMESHEETLINE_UPDATION_1),
                       timesheetLine.getId()),
                   e),
               ExceptionOriginRepository.INVOICE_ORIGIN,
@@ -185,20 +201,22 @@ public class BatchUpdateTaskService extends AbstractBatch {
       JPA.clear();
     }
     findBatch();
-    ProjectInvoicingAssistantBatchService.updateJsonObject(
+    BusinessProjectBatchService.updateJsonObject(
         batch, updatedTimesheetLineList, "updatedTimesheetLineSet", contextValues);
   }
 
   @Override
   protected void stop() {
-    String comment = I18n.get(IExceptionMessage.BATCH_TASK_UPDATION_2);
+    String comment = I18n.get(BusinessProjectExceptionMessage.BATCH_TASK_UPDATION_2);
 
     comment +=
-        String.format(
-            "\t" + I18n.get(com.axelor.apps.base.exceptions.IExceptionMessage.ALARM_ENGINE_BATCH_4),
-            batch.getAnomaly());
+        String.format("\t" + I18n.get(BaseExceptionMessage.BASE_BATCH_3), batch.getAnomaly());
 
     super.stop();
     addComment(comment);
+  }
+
+  protected void setBatchTypeSelect() {
+    this.batch.setBatchTypeSelect(BatchRepository.BATCH_TYPE_BUSINESS_PROJECT_BATCH);
   }
 }

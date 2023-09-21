@@ -1,11 +1,12 @@
 /*
  * Axelor Business Solutions
  *
- * Copyright (C) 2021 Axelor (<http://axelor.com>).
+ * Copyright (C) 2005-2023 Axelor (<http://axelor.com>).
  *
- * This program is free software: you can redistribute it and/or  modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -13,26 +14,24 @@
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 package com.axelor.apps.stock.web;
 
 import com.axelor.apps.ReportFactory;
+import com.axelor.apps.base.ResponseMessageType;
 import com.axelor.apps.base.service.administration.SequenceService;
 import com.axelor.apps.base.service.app.AppBaseService;
+import com.axelor.apps.base.service.exception.TraceBackService;
 import com.axelor.apps.report.engine.ReportSettings;
 import com.axelor.apps.stock.db.Inventory;
 import com.axelor.apps.stock.db.StockLocation;
 import com.axelor.apps.stock.db.StockMove;
 import com.axelor.apps.stock.db.repo.InventoryRepository;
-import com.axelor.apps.stock.db.repo.StockMoveRepository;
-import com.axelor.apps.stock.exception.IExceptionMessage;
+import com.axelor.apps.stock.exception.StockExceptionMessage;
 import com.axelor.apps.stock.report.IReport;
+import com.axelor.apps.stock.service.InventoryProductService;
 import com.axelor.apps.stock.service.InventoryService;
-import com.axelor.db.JPA;
-import com.axelor.exception.AxelorException;
-import com.axelor.exception.db.repo.TraceBackRepository;
-import com.axelor.exception.service.TraceBackService;
 import com.axelor.i18n.I18n;
 import com.axelor.inject.Beans;
 import com.axelor.meta.db.MetaFile;
@@ -45,8 +44,6 @@ import java.io.IOException;
 import java.lang.invoke.MethodHandles;
 import java.nio.file.Path;
 import java.util.List;
-import javax.persistence.NoResultException;
-import javax.persistence.Query;
 import org.eclipse.birt.core.exception.BirtException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,7 +69,9 @@ public class InventoryController {
       String name = I18n.get("Inventory") + " " + inventory.getInventorySeq();
 
       String fileLink =
-          ReportFactory.createReport(IReport.INVENTORY, name + "-${date}")
+          ReportFactory.createReport(
+                  IReport.INVENTORY,
+                  Beans.get(InventoryService.class).computeExportFileName(inventory))
               .addParam("InventoryId", inventory.getId())
               .addParam(
                   "Timezone",
@@ -122,9 +121,42 @@ public class InventoryController {
               .find(request.getContext().asType(Inventory.class).getId());
 
       Path filePath = Beans.get(InventoryService.class).importFile(inventory);
-      response.setFlash(
-          String.format(I18n.get(IExceptionMessage.INVENTORY_8), filePath.toString()));
+      response.setInfo(
+          String.format(I18n.get(StockExceptionMessage.INVENTORY_8), filePath.toString()));
 
+      response.setReload(true);
+    } catch (Exception e) {
+      TraceBackService.trace(response, e);
+    }
+  }
+
+  public void planInventory(ActionRequest request, ActionResponse response) {
+    try {
+      Long id = request.getContext().asType(Inventory.class).getId();
+      Inventory inventory = Beans.get(InventoryRepository.class).find(id);
+      Beans.get(InventoryService.class).planInventory(inventory);
+      response.setReload(true);
+    } catch (Exception e) {
+      TraceBackService.trace(response, e);
+    }
+  }
+
+  public void startInventory(ActionRequest request, ActionResponse response) {
+    try {
+      Long id = request.getContext().asType(Inventory.class).getId();
+      Inventory inventory = Beans.get(InventoryRepository.class).find(id);
+      Beans.get(InventoryService.class).startInventory(inventory);
+      response.setReload(true);
+    } catch (Exception e) {
+      TraceBackService.trace(response, e);
+    }
+  }
+
+  public void completeInventory(ActionRequest request, ActionResponse response) {
+    try {
+      Long id = request.getContext().asType(Inventory.class).getId();
+      Inventory inventory = Beans.get(InventoryRepository.class).find(id);
+      Beans.get(InventoryService.class).completeInventory(inventory);
       response.setReload(true);
     } catch (Exception e) {
       TraceBackService.trace(response, e);
@@ -153,6 +185,17 @@ public class InventoryController {
     }
   }
 
+  public void draftInventory(ActionRequest request, ActionResponse response) {
+    try {
+      Long id = request.getContext().asType(Inventory.class).getId();
+      Inventory inventory = Beans.get(InventoryRepository.class).find(id);
+      Beans.get(InventoryService.class).draftInventory(inventory);
+      response.setReload(true);
+    } catch (Exception e) {
+      TraceBackService.trace(response, e);
+    }
+  }
+
   public void fillInventoryLineList(ActionRequest request, ActionResponse response) {
     try {
       Long inventoryId = (Long) request.getContext().get("id");
@@ -160,12 +203,12 @@ public class InventoryController {
         Inventory inventory = Beans.get(InventoryRepository.class).find(inventoryId);
         Boolean succeed = Beans.get(InventoryService.class).fillInventoryLineList(inventory);
         if (succeed == null) {
-          response.setFlash(I18n.get(IExceptionMessage.INVENTORY_9));
+          response.setInfo(I18n.get(StockExceptionMessage.INVENTORY_9));
         } else {
           if (succeed) {
-            response.setNotify(I18n.get(IExceptionMessage.INVENTORY_10));
+            response.setNotify(I18n.get(StockExceptionMessage.INVENTORY_10));
           } else {
-            response.setNotify(I18n.get(IExceptionMessage.INVENTORY_11));
+            response.setNotify(I18n.get(StockExceptionMessage.INVENTORY_11));
           }
         }
       }
@@ -205,14 +248,11 @@ public class InventoryController {
               .add("form", "stock-move-form")
               .param("search-filters", "internal-stock-move-filters");
       if (stockMoveList.isEmpty()) {
-        response.setFlash(I18n.get("No stock moves found for this inventory."));
+        response.setInfo(I18n.get("No stock moves found for this inventory."));
       } else {
         builder
             .context("_showSingle", true)
-            .domain(
-                String.format(
-                    "self.originTypeSelect = '%s' AND self.originId = %s",
-                    StockMoveRepository.ORIGIN_INVENTORY, inventory.getId()));
+            .domain(String.format("self.inventory.id = %s", inventory.getId()));
         response.setView(builder.map());
       }
     } catch (Exception e) {
@@ -220,24 +260,12 @@ public class InventoryController {
     }
   }
 
-  public void checkDuplicateProduct(ActionRequest request, ActionResponse response)
-      throws AxelorException {
-    Inventory inventory = request.getContext().asType(Inventory.class);
-
-    Query query =
-        JPA.em()
-            .createQuery(
-                "select COUNT(*) FROM InventoryLine self WHERE self.inventory.id = :invent GROUP BY self.product, self.trackingNumber HAVING COUNT(self) > 1");
-
+  public void checkDuplicateProduct(ActionRequest request, ActionResponse response) {
     try {
-      query.setParameter("invent", inventory.getId()).getSingleResult();
-
-      throw new AxelorException(
-          TraceBackRepository.CATEGORY_CONFIGURATION_ERROR,
-          I18n.get(IExceptionMessage.INVENTORY_PRODUCT_TRACKING_NUMBER_ERROR));
-
-    } catch (NoResultException e) {
-      // if control came here means no duplicate product.
+      Inventory inventory = request.getContext().asType(Inventory.class);
+      Beans.get(InventoryProductService.class).checkDuplicate(inventory);
+    } catch (Exception e) {
+      TraceBackService.trace(response, e, ResponseMessageType.ERROR);
     }
   }
 }

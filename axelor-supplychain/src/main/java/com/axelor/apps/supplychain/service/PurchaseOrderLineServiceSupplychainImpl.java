@@ -1,11 +1,12 @@
 /*
  * Axelor Business Solutions
  *
- * Copyright (C) 2021 Axelor (<http://axelor.com>).
+ * Copyright (C) 2005-2023 Axelor (<http://axelor.com>).
  *
- * This program is free software: you can redistribute it and/or  modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -13,18 +14,19 @@
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 package com.axelor.apps.supplychain.service;
 
 import com.axelor.apps.account.db.AnalyticDistributionTemplate;
 import com.axelor.apps.account.db.AnalyticMoveLine;
-import com.axelor.apps.account.db.BudgetDistribution;
+import com.axelor.apps.account.db.repo.AccountConfigRepository;
 import com.axelor.apps.account.db.repo.AnalyticMoveLineRepository;
-import com.axelor.apps.account.service.AnalyticMoveLineService;
+import com.axelor.apps.account.service.analytic.AnalyticMoveLineService;
 import com.axelor.apps.account.service.app.AppAccountService;
+import com.axelor.apps.account.service.config.AccountConfigService;
+import com.axelor.apps.base.AxelorException;
 import com.axelor.apps.base.db.Unit;
-import com.axelor.apps.base.db.repo.AppAccountRepository;
 import com.axelor.apps.base.service.UnitConversionService;
 import com.axelor.apps.purchase.db.PurchaseOrder;
 import com.axelor.apps.purchase.db.PurchaseOrderLine;
@@ -33,8 +35,6 @@ import com.axelor.apps.sale.db.SaleOrderLine;
 import com.axelor.apps.sale.db.repo.SaleOrderLineRepository;
 import com.axelor.auth.AuthUtils;
 import com.axelor.auth.db.User;
-import com.axelor.exception.AxelorException;
-import com.axelor.inject.Beans;
 import com.google.common.base.Preconditions;
 import com.google.inject.Inject;
 import java.lang.invoke.MethodHandles;
@@ -54,6 +54,8 @@ public class PurchaseOrderLineServiceSupplychainImpl extends PurchaseOrderLineSe
 
   @Inject protected AppAccountService appAccountService;
 
+  @Inject protected AccountConfigService accountConfigService;
+
   private static final Logger LOG = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
   public PurchaseOrderLine fill(PurchaseOrderLine purchaseOrderLine, PurchaseOrder purchaseOrder)
@@ -70,8 +72,7 @@ public class PurchaseOrderLineServiceSupplychainImpl extends PurchaseOrderLineSe
       PurchaseOrder purchaseOrder, SaleOrderLine saleOrderLine) throws AxelorException {
 
     LOG.debug(
-        "Création d'une ligne de commande fournisseur pour le produit : {}",
-        saleOrderLine.getProductName());
+        "Creation of a purchase order line for the product : {}", saleOrderLine.getProductName());
 
     Unit unit = null;
     BigDecimal qty = BigDecimal.ZERO;
@@ -93,19 +94,26 @@ public class PurchaseOrderLineServiceSupplychainImpl extends PurchaseOrderLineSe
 
     PurchaseOrderLine purchaseOrderLine =
         super.createPurchaseOrderLine(
-            purchaseOrder, saleOrderLine.getProduct(), null, null, qty, unit);
+            purchaseOrder,
+            saleOrderLine.getProduct(),
+            saleOrderLine.getProductName(),
+            null,
+            qty,
+            unit);
 
     purchaseOrderLine.setIsTitleLine(
-        saleOrderLine.getTypeSelect() == SaleOrderLineRepository.TYPE_TITLE);
+        !(saleOrderLine.getTypeSelect() == SaleOrderLineRepository.TYPE_NORMAL));
     this.getAndComputeAnalyticDistribution(purchaseOrderLine, purchaseOrder);
     return purchaseOrderLine;
   }
 
   public PurchaseOrderLine getAndComputeAnalyticDistribution(
-      PurchaseOrderLine purchaseOrderLine, PurchaseOrder purchaseOrder) {
+      PurchaseOrderLine purchaseOrderLine, PurchaseOrder purchaseOrder) throws AxelorException {
 
-    if (appAccountService.getAppAccount().getAnalyticDistributionTypeSelect()
-        == AppAccountRepository.DISTRIBUTION_TYPE_FREE) {
+    if (accountConfigService
+            .getAccountConfig(purchaseOrder.getCompany())
+            .getAnalyticDistributionTypeSelect()
+        == AccountConfigRepository.DISTRIBUTION_TYPE_FREE) {
       return purchaseOrderLine;
     }
 
@@ -113,7 +121,9 @@ public class PurchaseOrderLineServiceSupplychainImpl extends PurchaseOrderLineSe
         analyticMoveLineService.getAnalyticDistributionTemplate(
             purchaseOrder.getSupplierPartner(),
             purchaseOrderLine.getProduct(),
-            purchaseOrder.getCompany());
+            purchaseOrder.getCompany(),
+            purchaseOrder.getTradingName(),
+            true);
 
     purchaseOrderLine.setAnalyticDistributionTemplate(analyticDistributionTemplate);
 
@@ -173,23 +183,5 @@ public class PurchaseOrderLineServiceSupplychainImpl extends PurchaseOrderLineSe
       return undeliveryQty;
     }
     return BigDecimal.ZERO;
-  }
-
-  public void computeBudgetDistributionSumAmount(
-      PurchaseOrderLine purchaseOrderLine, PurchaseOrder purchaseOrder) {
-    List<BudgetDistribution> budgetDistributionList = purchaseOrderLine.getBudgetDistributionList();
-    BigDecimal budgetDistributionSumAmount = BigDecimal.ZERO;
-    LocalDate computeDate = purchaseOrder.getOrderDate();
-
-    if (budgetDistributionList != null && !budgetDistributionList.isEmpty()) {
-
-      for (BudgetDistribution budgetDistribution : budgetDistributionList) {
-        budgetDistributionSumAmount =
-            budgetDistributionSumAmount.add(budgetDistribution.getAmount());
-        Beans.get(BudgetSupplychainService.class)
-            .computeBudgetDistributionSumAmount(budgetDistribution, computeDate);
-      }
-    }
-    purchaseOrderLine.setBudgetDistributionSumAmount(budgetDistributionSumAmount);
   }
 }

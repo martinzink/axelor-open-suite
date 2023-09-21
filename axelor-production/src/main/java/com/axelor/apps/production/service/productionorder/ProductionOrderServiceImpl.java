@@ -1,11 +1,12 @@
 /*
  * Axelor Business Solutions
  *
- * Copyright (C) 2021 Axelor (<http://axelor.com>).
+ * Copyright (C) 2005-2023 Axelor (<http://axelor.com>).
  *
- * This program is free software: you can redistribute it and/or  modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -13,24 +14,28 @@
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 package com.axelor.apps.production.service.productionorder;
 
+import com.axelor.apps.base.AxelorException;
 import com.axelor.apps.base.db.Product;
 import com.axelor.apps.base.db.repo.SequenceRepository;
+import com.axelor.apps.base.db.repo.TraceBackRepository;
 import com.axelor.apps.base.service.administration.SequenceService;
 import com.axelor.apps.production.db.BillOfMaterial;
 import com.axelor.apps.production.db.ManufOrder;
 import com.axelor.apps.production.db.ProductionOrder;
 import com.axelor.apps.production.db.repo.ManufOrderRepository;
 import com.axelor.apps.production.db.repo.ProductionOrderRepository;
-import com.axelor.apps.production.exceptions.IExceptionMessage;
+import com.axelor.apps.production.exceptions.ProductionExceptionMessage;
 import com.axelor.apps.production.service.manuforder.ManufOrderService;
+import com.axelor.apps.production.service.manuforder.ManufOrderService.ManufOrderOriginType;
+import com.axelor.apps.production.service.manuforder.ManufOrderService.ManufOrderOriginTypeProduction;
 import com.axelor.apps.sale.db.SaleOrder;
-import com.axelor.exception.AxelorException;
-import com.axelor.exception.db.repo.TraceBackRepository;
+import com.axelor.apps.sale.db.SaleOrderLine;
 import com.axelor.i18n.I18n;
+import com.google.common.base.Strings;
 import com.google.inject.Inject;
 import com.google.inject.persist.Transactional;
 import java.math.BigDecimal;
@@ -66,12 +71,14 @@ public class ProductionOrderServiceImpl implements ProductionOrderService {
 
   public String getProductionOrderSeq() throws AxelorException {
 
-    String seq = sequenceService.getSequenceNumber(SequenceRepository.PRODUCTION_ORDER);
+    String seq =
+        sequenceService.getSequenceNumber(
+            SequenceRepository.PRODUCTION_ORDER, ProductionOrder.class, "productionOrderSeq");
 
     if (seq == null) {
       throw new AxelorException(
           TraceBackRepository.CATEGORY_CONFIGURATION_ERROR,
-          I18n.get(IExceptionMessage.PRODUCTION_ORDER_SEQ));
+          I18n.get(ProductionExceptionMessage.PRODUCTION_ORDER_SEQ));
     }
 
     return seq;
@@ -106,7 +113,8 @@ public class ProductionOrderServiceImpl implements ProductionOrderService {
         startDate,
         null,
         null,
-        ManufOrderService.ORIGIN_TYPE_OTHER);
+        null,
+        ManufOrderOriginTypeProduction.ORIGIN_TYPE_OTHER);
 
     return productionOrderRepo.save(productionOrder);
   }
@@ -121,7 +129,8 @@ public class ProductionOrderServiceImpl implements ProductionOrderService {
       LocalDateTime startDate,
       LocalDateTime endDate,
       SaleOrder saleOrder,
-      int originType)
+      SaleOrderLine saleOrderLine,
+      ManufOrderOriginType manufOrderOriginType)
       throws AxelorException {
 
     ManufOrder manufOrder =
@@ -133,13 +142,21 @@ public class ProductionOrderServiceImpl implements ProductionOrderService {
             billOfMaterial,
             startDate,
             endDate,
-            originType);
+            manufOrderOriginType);
 
     if (manufOrder != null) {
       if (saleOrder != null) {
         manufOrder.addSaleOrderSetItem(saleOrder);
         manufOrder.setClientPartner(saleOrder.getClientPartner());
-        manufOrder.setMoCommentFromSaleOrder(saleOrder.getProductionNote());
+        manufOrder.setMoCommentFromSaleOrder("");
+        manufOrder.setMoCommentFromSaleOrderLine("");
+        if (!Strings.isNullOrEmpty(saleOrder.getProductionNote())) {
+          manufOrder.setMoCommentFromSaleOrder(saleOrder.getProductionNote());
+        }
+        if (saleOrderLine != null
+            && !Strings.isNullOrEmpty(saleOrderLine.getLineProductionComment())) {
+          manufOrder.setMoCommentFromSaleOrderLine(saleOrderLine.getLineProductionComment());
+        }
       }
       productionOrder.addManufOrderSetItem(manufOrder);
       manufOrder.addProductionOrderSetItem(productionOrder);
